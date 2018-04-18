@@ -1,5 +1,5 @@
 import bz2
-import cPickle
+import pickle
 
 
 # file = "/Volumes/RedditData/train-unbalanced.csv.bz2"
@@ -26,4 +26,4 @@ def getUserDict(generator):
 # Write objects to pickle
 def pickleFile(path, obj):
     file = open(path, 'w')
-    cPickle.dump(obj, file)
+    pickle.dump(obj, file)
