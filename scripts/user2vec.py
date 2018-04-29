@@ -1,7 +1,7 @@
 
 # coding: utf-8
 
-# In[431]:
+# In[2]:
 
 
 import tensorflow as tf
@@ -12,14 +12,14 @@ import parameters
 import numpy as np
 
 
-# In[432]:
+# In[3]:
 
 
 #User2Vec = namedtuple('User2Vec', ['user_id', 'sent_ids', 'neg_ids', 'optimizer', 'loss', 'normalized_U'])
 User2Vec = namedtuple('User2Vec', ['user_id', 'sent_ids', 'neg_ids', 'app', 'loss', 'normalized_U',"score"])
 
 
-# In[433]:
+# In[4]:
 
 
 def hinge_loss(user_embeds, word_embeds, neg_sample_ids):
@@ -38,84 +38,87 @@ def hinge_loss(user_embeds, word_embeds, neg_sample_ids):
     return loss
 
 
-# In[434]:
+# In[10]:
 
 
 def build_model(sess, graph, embed_matrix_rows, n_users, embed_matrix):
     lam = 1e-8
     with graph.as_default():
     # Ops and variables pinned to the CPU because of missing GPU implementation
-        with tf.device('/cpu:0'):
-            global_step = tf.Variable(0, trainable=False)
+        for d in ['/device:GPU:2', '/device:GPU:3']:
+            with tf.device(d):
+
+        
+                global_step = tf.Variable(0, trainable=False)
+
+                # u_j
+                user_id = tf.placeholder(tf.int32, shape=[1])
+                print('user_ids: ', user_id)
+                U = tf.Variable(tf.random_uniform([n_users, parameters.embedding_size], -1.0, 1.0))
+                print('U: ', U)
+                user_embed = tf.nn.embedding_lookup(U, user_id)
+                #user_embed = tf.slice(U, [0, user_id], [U.get_shape()[0], 1])
+    #             user_embed = tf.transpose(user_embed)
+                print('user_embed: ', user_embed)
+
+                # e_i
+                E = tf.Variable(embed_matrix, dtype=tf.float32)
+                print('E: ', E)
+                sent_ids = tf.placeholder(tf.int32, shape=None)
+                print('sent_ids: ', sent_ids)
+                word_embeds = tf.nn.embedding_lookup(E, sent_ids)
+                print('word_embeds :', word_embeds)
+
+                # e_l
+                neg_ids = tf.placeholder(tf.int32, shape=None)
+                neg_sample_ids = tf.nn.embedding_lookup(E, neg_ids)
+
+                hinge_loss_1 =  hinge_loss(user_embed, word_embeds, neg_sample_ids)
+                #U_regularizer = tf.nn.l2_loss(U)
+                #E_regularizer = tf.nn.l2_loss(E)
+
+                loss = tf.reduce_mean(hinge_loss_1 )#+ (lam/2) *  U_regularizer + (lam/2) *  E_regularizer)
+
             
-            # u_j
-            user_id = tf.placeholder(tf.int32, shape=[1])
-            print('user_ids: ', user_id)
-            U = tf.Variable(tf.random_uniform([n_users, parameters.embedding_size], -1.0, 1.0))
-            print('U: ', U)
-            user_embed = tf.nn.embedding_lookup(U, user_id)
-            #user_embed = tf.slice(U, [0, user_id], [U.get_shape()[0], 1])
-#             user_embed = tf.transpose(user_embed)
-            print('user_embed: ', user_embed)
+            # Construct the SGD optimizer using a learning rate of 1.0.
+            #optimizer = tf.train.GradientDescentOptimizer(1e-6).minimize(loss, global_step=global_step)
 
-            # e_i
-            E = tf.Variable(embed_matrix, dtype=tf.float32)
-            print('E: ', E)
-            sent_ids = tf.placeholder(tf.int32, shape=None)
-            print('sent_ids: ', sent_ids)
-            word_embeds = tf.nn.embedding_lookup(E, sent_ids)
-            print('word_embeds :', word_embeds)
-            
-            # e_l
-            neg_ids = tf.placeholder(tf.int32, shape=None)
-            neg_sample_ids = tf.nn.embedding_lookup(E, neg_ids)
 
-            hinge_loss_1 =  hinge_loss(user_embed, word_embeds, neg_sample_ids)
-            #U_regularizer = tf.nn.l2_loss(U)
-            #E_regularizer = tf.nn.l2_loss(E)
+            #optimizer = tf.train.GradientDescentOptimizer(1e-6)
+            #grads = optimizer.compute_gradients(loss)
+            #clipped_grads = [(tf.clip_by_norm(grad, 5), var) for grad, var in grads]
+            #app = optimizer.apply_gradients(clipped_grads)
 
-            loss = tf.reduce_mean(hinge_loss_1 )#+ (lam/2) *  U_regularizer + (lam/2) *  E_regularizer)
+            #AdamOptimizer
 
-            
-        # Construct the SGD optimizer using a learning rate of 1.0.
-        #optimizer = tf.train.GradientDescentOptimizer(1e-6).minimize(loss, global_step=global_step)
-        
-        
-        #optimizer = tf.train.GradientDescentOptimizer(1e-6)
-        #grads = optimizer.compute_gradients(loss)
-        #clipped_grads = [(tf.clip_by_norm(grad, 5), var) for grad, var in grads]
-        #app = optimizer.apply_gradients(clipped_grads)
-        
-        #AdamOptimizer
-        
-        #optimizer = tf.train.AdamOptimizer(1e-6)
-        #grads = optimizer.compute_gradients(loss)
-        #clipped_grads = [(tf.clip_by_norm(grad, 5), var) for grad, var in grads]
-        #app = optimizer.apply_gradients(clipped_grads)
-        
-        #MomentumOptimizer
-        optimizer = tf.train.MomentumOptimizer(1e-8,0.9)
-        grads = optimizer.compute_gradients(loss)
-        clipped_grads = [(tf.clip_by_norm(grad, 5), var) for grad, var in grads]
-        app = optimizer.apply_gradients(clipped_grads)
-        
-        
-        # Compute the cosine similarity between minibatch examples and all embeddings.
-        norm = tf.sqrt(tf.reduce_sum(tf.square(U), 1, keep_dims=True))
-        normalized_U = U / norm
-        
-        # generating score by adding the probabilities with which wrd2vec and user2vec were trained to do evaluation 
-        # and finding the U with best score to stored for future use in CUE-CNN
-        step_1 = tf.matmul(E,U,transpose_b = True)
-        #print("step_1", step_1)
-        step_2 = tf.nn.softmax(tf.transpose(step_1))
-        step_3= tf.log(step_2)
-        #print("step_2", step_2)
-        score  = tf.reduce_mean(step_3,1)
-        #print("score", score)
-        
-        tf.global_variables_initializer().run()
-        print(" Train Initialized")
+            #optimizer = tf.train.AdamOptimizer(1e-6)
+            #grads = optimizer.compute_gradients(loss)
+            #clipped_grads = [(tf.clip_by_norm(grad, 5), var) for grad, var in grads]
+            #app = optimizer.apply_gradients(clipped_grads)
+
+            #MomentumOptimizer
+            optimizer = tf.train.MomentumOptimizer(1e-8,0.9)
+            grads = optimizer.compute_gradients(loss)
+            clipped_grads = [(tf.clip_by_norm(grad, 5), var) for grad, var in grads]
+            app = optimizer.apply_gradients(clipped_grads)
+
+
+            # Compute the cosine similarity between minibatch examples and all embeddings.
+            norm = tf.sqrt(tf.reduce_sum(tf.square(U), 1, keep_dims=True))
+            normalized_U = U / norm
+
+            # generating score by adding the probabilities with which wrd2vec and user2vec were trained to do evaluation 
+            # and finding the U with best score to stored for future use in CUE-CNN
+            step_1 = tf.matmul(E,U,transpose_b = True)
+            #print("step_1", step_1)
+            step_2 = tf.nn.softmax(tf.transpose(step_1))
+            step_3= tf.log(step_2)
+            #print("step_2", step_2)
+            score  = tf.reduce_mean(step_3,1)
+            #print("score", score)
+
+            tf.global_variables_initializer().run()
+            print(" Train Initialized")
 
     #model = User2Vec(user_id, sent_ids, neg_ids, optimizer, loss, normalized_U)
     model = User2Vec(user_id, sent_ids, neg_ids, app, loss, normalized_U,score)
@@ -123,7 +126,7 @@ def build_model(sess, graph, embed_matrix_rows, n_users, embed_matrix):
     return model
 
 
-# In[435]:
+# In[6]:
 
 
 def train(sess, model, n_users):
@@ -182,7 +185,7 @@ def train(sess, model, n_users):
     
 
 
-# In[436]:
+# In[7]:
 
 
 def evaluate(sess, model, n_users):
@@ -219,7 +222,7 @@ def evaluate(sess, model, n_users):
     
 
 
-# In[437]:
+# In[8]:
 
 
 if __name__ == '__main__':
