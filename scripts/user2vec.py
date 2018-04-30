@@ -25,16 +25,16 @@ User2Vec = namedtuple('User2Vec', ['user_id', 'sent_ids', 'neg_ids', 'app', 'los
 def hinge_loss(user_embeds, word_embeds, neg_sample_ids):
     pos_score = tf.matmul(user_embeds, word_embeds, transpose_b = True)
     print('pos_score: ', pos_score)
-    
+
     user_embeds_t = tf.transpose(user_embeds)
     neg_sample_ids_t = tf.transpose(neg_sample_ids)
-    
+
     neg_score = tf.matmul(neg_sample_ids, user_embeds_t)
     #neg_score = tf.tensordot(neg_sample_ids_t, user_embeds_t, [0,0])
     print('neg_score: ', neg_score)
 
     loss = tf.maximum(0.0, 1 - tf.add(pos_score,neg_score))
-    
+
     return loss
 
 
@@ -45,10 +45,10 @@ def build_model(sess, graph, embed_matrix_rows, n_users, embed_matrix):
     lam = 1e-8
     with graph.as_default():
     # Ops and variables pinned to the CPU because of missing GPU implementation
-        for d in ['/device:GPU:2', '/device:GPU:3']:
+        for d in ['/cpu:0']:
             with tf.device(d):
 
-        
+
                 global_step = tf.Variable(0, trainable=False)
 
                 # u_j
@@ -79,7 +79,7 @@ def build_model(sess, graph, embed_matrix_rows, n_users, embed_matrix):
 
                 loss = tf.reduce_mean(hinge_loss_1 )#+ (lam/2) *  U_regularizer + (lam/2) *  E_regularizer)
 
-            
+
             # Construct the SGD optimizer using a learning rate of 1.0.
             #optimizer = tf.train.GradientDescentOptimizer(1e-6).minimize(loss, global_step=global_step)
 
@@ -97,7 +97,7 @@ def build_model(sess, graph, embed_matrix_rows, n_users, embed_matrix):
             #app = optimizer.apply_gradients(clipped_grads)
 
             #MomentumOptimizer
-            optimizer = tf.train.MomentumOptimizer(1e-8,0.9)
+            optimizer = tf.train.MomentumOptimizer(1e-6,0.9)
             grads = optimizer.compute_gradients(loss)
             clipped_grads = [(tf.clip_by_norm(grad, 5), var) for grad, var in grads]
             app = optimizer.apply_gradients(clipped_grads)
@@ -107,7 +107,7 @@ def build_model(sess, graph, embed_matrix_rows, n_users, embed_matrix):
             norm = tf.sqrt(tf.reduce_sum(tf.square(U), 1, keep_dims=True))
             normalized_U = U / norm
 
-            # generating score by adding the probabilities with which wrd2vec and user2vec were trained to do evaluation 
+            # generating score by adding the probabilities with which wrd2vec and user2vec were trained to do evaluation
             # and finding the U with best score to stored for future use in CUE-CNN
             step_1 = tf.matmul(E,U,transpose_b = True)
             #print("step_1", step_1)
@@ -122,7 +122,7 @@ def build_model(sess, graph, embed_matrix_rows, n_users, embed_matrix):
 
     #model = User2Vec(user_id, sent_ids, neg_ids, optimizer, loss, normalized_U)
     model = User2Vec(user_id, sent_ids, neg_ids, app, loss, normalized_U,score)
-    
+
     return model
 
 
@@ -130,40 +130,42 @@ def build_model(sess, graph, embed_matrix_rows, n_users, embed_matrix):
 
 
 def train(sess, model, n_users):
-    
+
     user_ids = np.arange(n_users)
-    max_num_steps = 10000
+    max_num_steps = 50
     #max_num_steps = 10
-  
+
+    #print("user train data", user_train_data)
     user_idx = {}
     for prev_user, train, test, neg_samples in user_train_data:
-        
+
         try:
             user_id = user_idx[prev_user]
         except KeyError:
             user_idx[prev_user] = len(user_idx)
         print('user: ', user_idx[prev_user])
-        
+        if user_idx[prev_user] > 500:
+            break
         average_loss_step = max(parameters.checkpoint_step/10, 100)
-    
+
         average_loss = 0
-        
+
         for step in range(max_num_steps):
 #             print('step: ', step)
-              
+            if train == []:
+                #print("skipped user")
+                continue
             for id in np.random.permutation(len(train)):
-                
+
 #                 print('train[id]', len(train[id]))
-                
+
 #                 print('train[id]', len(neg_samples[id]))
 #                 print('neg samples: ', neg_samples)
 #                 print('train: ', train)
-                
-                for x in train[id]:
-                    assert not np.any(np.isnan(x))
+
+
                 #print('train: ', train[id])
-                if train[id] == []:
-                    continue
+
                 feed_dict = {model.user_id.name: [user_idx[prev_user]], model.sent_ids.name: train[id],
                              model.neg_ids.name: neg_samples[id]}
 
@@ -171,18 +173,18 @@ def train(sess, model, n_users):
             #_, loss_val = sess.run([model.optimizer, model.loss], feed_dict=feed_dict)
             _, loss_val = sess.run([model.app, model.loss], feed_dict=feed_dict)
             average_loss += loss_val
-            
-            if step % 1000 == 0:
+
+            if step % 10 == 0:
                 if step > 0:
-                    average_loss /= 1000
+                    average_loss /= 10
                 print("Average loss at step ", step, ": ", average_loss)
                 average_loss = 0
-            
-                
-                
-    
+
+
+
+
     print("Train Finished")
-    
+
 
 
 # In[7]:
@@ -190,48 +192,50 @@ def train(sess, model, n_users):
 
 def evaluate(sess, model, n_users):
     user_ids = np.arange(n_users)
-    max_num_steps = 100
+    max_num_steps = 25
     prev_logscore_n_users = float("-inf")
     #print("prev_logscore_n_users",type(prev_logscore_n_users))
     user_idx = {}
     for prev_user, train, test, neg_samples in user_train_data:
-        
+
         try:
             user_id = user_idx[prev_user]
         except KeyError:
             user_idx[prev_user] = len(user_idx)
-        #print("user",user_idx[prev_user])
+        print("user",user_idx[prev_user])
         #print("\n\n")
+        if user_idx[prev_user] > 500:
+            break
         for step in range(max_num_steps):
             logscore_n_users = 0.0
-            
+
             for msg in test:
-                score = sess.run([model.score], feed_dict = {model.user_id.name: [user_idx[prev_user]], 
+                score = sess.run([model.score], feed_dict = {model.user_id.name: [user_idx[prev_user]],
                                                              model.sent_ids.name: msg})
                 score_uidx = score[0][user_idx[prev_user]]
                 #print("Score_uidx",score_uidx)
                 logscore_n_users += score_uidx
-            print("avg logscore ", logscore_n_users/len(test))
-            print("prev_logscore_n_users ", prev_logscore_n_users)
+            #print("avg logscore ", logscore_n_users/len(test))
+            #print("prev_logscore_n_users ", prev_logscore_n_users)
             if logscore_n_users/len(test) > prev_logscore_n_users:
                 final_embeddings = model.normalized_U.eval()
                 prev_logscore_n_users = logscore_n_users/len(test)
-    print("Returning Best U")   
-    return final_embeddings        
-    
-    
+    print("Returning Best U")
+    return final_embeddings
+
+
 
 
 # In[8]:
 
 
 if __name__ == '__main__':
-    
+
     # load pickled word embeddings
     # because we want the number of users which we pickled here
-    embed_matrix, unigram_prob, wrd2idx, word_counter, n_users = pickle.load(open(parameters.E_pkl, 'rb'))
-       
-    user_train_data = pickle.load(open(parameters.user_train_pkl, 'rb'))
+    embed_matrix, unigram_prob, wrd2idx, word_counter, n_users = pickle.load(open("train_embeddings.pkl", 'rb'))
+
+    user_train_data = pickle.load(open("user_train_data.pkl", 'rb'))
 
     graph = tf.Graph()
     with tf.Session(graph=graph) as sess:
@@ -240,5 +244,4 @@ if __name__ == '__main__':
         train(sess, model, n_users)
         user_embeddings = evaluate(sess,model, n_users)
     #print(user_embeddings)
-    pickle.dump(user_embeddings, open('user_embeddings.pkl', 'wb'))
-
+    pickle.dump(user_embeddings, open('user_embeddings_500.pkl', 'wb'))
